@@ -1,0 +1,7 @@
+cloudflare:
+  - example.com && *.example.com
+  - example.org && *.example.org
+dnspod:
+  - example.org && *.example.org
+aliyun:
+  - example.org && *.example.org

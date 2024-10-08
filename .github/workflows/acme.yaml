@@ -1,0 +1,361 @@
+name: Auto SSL
+
+on:
+  schedule:
+     - cron: "0 17 * * *" #(UTC+8 01:00)
+  workflow_dispatch:
+
+env:
+  ACME: /home/runner/.acme.sh/acme.sh
+  EMAIL: ${{ secrets.ACCOUNT_EMAIL }}
+  DNSAPI: ${{ secrets.DNSAPI }}
+  CA: ${{ vars.CA }}
+  BACKUP_CA: ${{ vars.BACKUP_CA }}
+  DOH_USE: ${{ vars.DOH_USE }}
+  ECC_KEYLENGTH: ${{ vars.ECC_KEYLENGTH }}
+  RSA_KEYLENGTH: ${{ vars.RSA_KEYLENGTH }}
+  ZEROSSL_EAB_KEY_ID: ${{ secrets.ZEROSSL_EAB_KEY_ID }}
+  ZEROSSL_EAB_HMAC_KEY: ${{ secrets.ZEROSSL_EAB_HMAC_KEY }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        # 检出代码库
+
+      - name: Setup Git
+        run: |
+          git config --global user.email $EMAIL
+          git config --global user.name acme
+        # 配置 Git 用户信息
+
+      - name: Install Dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y --upgrade ca-certificates openssl tree socat openssh-client coreutils curl sed tzdata tar jq  
+          wget -O yq_linux_amd64 https://github.com/mikefarah/yq/releases/download/v4.28.1/yq_linux_amd64
+          chmod +x yq_linux_amd64
+          sudo mv yq_linux_amd64 /usr/local/bin/yq
+        # 安装必要的依赖包和工具
+
+      - name: Install & Configure acme.sh
+        run: |
+          curl https://get.acme.sh | sh -s email=$EMAIL
+          echo "$DNSAPI" >> /home/runner/.acme.sh/account.conf
+
+          ZEROSSL_CONF_PATH="/home/runner/.acme.sh/ca/acme.zerossl.com/v2/DV90/ca.conf"
+          mkdir -p "$(dirname "$ZEROSSL_CONF_PATH")"
+          echo "CA_EAB_KEY_ID='${{ secrets.ZEROSSL_EAB_KEY_ID }}'" > "$ZEROSSL_CONF_PATH"
+          echo "CA_EAB_HMAC_KEY='${{ secrets.ZEROSSL_EAB_HMAC_KEY }}'" >> "$ZEROSSL_CONF_PATH"
+          cat "$ZEROSSL_CONF_PATH"
+        # 安装并配置 acme.sh，设置 ZeroSSL 的 EAB 密钥
+
+      - name: Update Certificate Status
+        run: |
+          CURRENT_TIME=$(date +"%Y-%m-%d %H:%M:%S")
+          CERT_FILE="Certificate.md"
+          BACKUP_CERT_FILE="Backup_Certificate.md"
+  
+          echo "## Certificate Status (Updated at $CURRENT_TIME)" > $CERT_FILE
+          echo "| Domain Group | Primary Domain | Expiry Date (ECC) | Issuer O (ECC) | Issuer CN (ECC) | Expiry Date (RSA) | Issuer O (RSA) | Issuer CN (RSA) |" >> $CERT_FILE
+          echo "|--------------|----------------|------------------|---------------|----------------|-------------------|----------------|-----------------|" >> $CERT_FILE
+  
+          echo "## Backup Certificate Status (Updated at $CURRENT_TIME)" > $BACKUP_CERT_FILE
+          echo "| Domain Group | Primary Domain | Expiry Date (ECC) | Issuer O (ECC) | Issuer CN (ECC) | Expiry Date (RSA) | Issuer O (RSA) | Issuer CN (RSA) |" >> $BACKUP_CERT_FILE
+          echo "|--------------|----------------|------------------|---------------|----------------|-------------------|----------------|-----------------|" >> $BACKUP_CERT_FILE
+  
+          while IFS= read -r provider; do
+            provider=${provider#- }
+            while IFS= read -r domain_group; do
+              domain_group=${domain_group#- }
+              domain_group=$(echo "$domain_group" | sed 's/ && / /g')
+              primary_domain=$(echo "$domain_group" | awk '{print $1}')
+  
+              expiry_date_ecc="N/A"
+              issuer_o_ecc="N/A"
+              issuer_cn_ecc="N/A"
+              expiry_date_rsa="N/A"
+              issuer_o_rsa="N/A"
+              issuer_cn_rsa="N/A"
+  
+              backup_expiry_date_ecc="N/A"
+              backup_issuer_o_ecc="N/A"
+              backup_issuer_cn_ecc="N/A"
+              backup_expiry_date_rsa="N/A"
+              backup_issuer_o_rsa="N/A"
+              backup_issuer_cn_rsa="N/A"
+  
+              if [ -f "./ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
+                expiry_date_ecc=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer")
+                issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              if [ -f "./ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
+                expiry_date_rsa=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer")
+                issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              if [ -f "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
+                backup_expiry_date_ecc=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer")
+                backup_issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                backup_issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              if [ -f "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
+                backup_expiry_date_rsa=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer")
+                backup_issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                backup_issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              echo "| $domain_group | $primary_domain | $expiry_date_ecc | $issuer_o_ecc | $issuer_cn_ecc | $expiry_date_rsa | $issuer_o_rsa | $issuer_cn_rsa |" >> $CERT_FILE
+              echo "| $domain_group | $primary_domain | $backup_expiry_date_ecc | $backup_issuer_o_ecc | $backup_issuer_cn_ecc | $backup_expiry_date_rsa | $backup_issuer_o_rsa | $backup_issuer_cn_rsa |" >> $BACKUP_CERT_FILE
+            done < <(yq eval ".[\"$provider\"]" domains.yaml)
+          done < <(yq eval 'keys' domains.yaml)
+  
+          git add $CERT_FILE $BACKUP_CERT_FILE
+          git commit -m "Update Certificate.md and Backup_Certificate.md with certificate expiry dates and execution time at $CURRENT_TIME"  
+        # 更新证书状态文件，记录证书的过期时间和颁发者信息
+
+      - name: Issue & Deploy Certificates
+        run: |
+          create_github_issue() {
+            title=$1
+            body=$2
+            repo=${GITHUB_REPOSITORY}
+            curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                 -H "Accept: application/vnd.github+json" \
+                 -H "X-GitHub-Api-Version: 2022-11-28" \
+                 -d "{\"title\": \"$title\", \"body\": \"$body\"}" \
+                 https://api.github.com/repos/$repo/issues
+          }
+        
+          check_certificate_validity() {
+            cert_path=$1
+            if [ -f "$cert_path" ] && openssl x509 -checkend $((30 * 86400)) -noout -in "$cert_path"; then
+                echo "[-] Certificate at $cert_path is valid for more than 30 days, skipping..."
+                return 0
+              else
+                return 1
+              fi
+            }
+        
+            verify_certificate_domains() {
+              cert_file=$1
+              domain_group=$2
+              cert_domains=$(openssl x509 -in "$cert_file" -text -noout | grep -oP '(?<=DNS:)[^,]*')
+              missing_domains=()
+              for domain in $domain_group; do
+                if ! echo "$cert_domains" | grep -qw "$domain"; then
+                  missing_domains+=("$domain")
+                fi
+              done
+              if [ ${#missing_domains[@]} -gt 0 ]; then
+                echo "${missing_domains[@]}"
+              else
+                echo ""
+              fi
+            }
+        
+            issue_and_install_certificate() {
+              domains=$1
+              cert_type=$2
+              acme_server=$3
+              keylength=$4
+              dns_plugin=${dns_plugins[$5]}
+              ca_type=$6
+              cert_path="./ssl/$primary_domain/$cert_type"
+              if [ "$ca_type" = "BACKUP" ]; then
+                cert_path="./backup_ssl/$primary_domain/$cert_type"
+              fi
+              cert_file="$cert_path/$primary_domain.cer"
+              key_file="$cert_path/$primary_domain.key"
+              domain_args=""
+              for domain in $domains; do
+                domain_args="$domain_args -d $domain"
+              done
+        
+              echo "[+] Issue $cert_type certificate for $domains using $ca_type CA"
+              if [ "$ca_type" = "BACKUP" ]; then
+                $ACME --issue --server $acme_server --dns $dns_plugin $domain_args ${keylength:+--keylength $keylength} --force --debug 2
+              else
+                $ACME --issue --server $acme_server --dns $dns_plugin $domain_args ${keylength:+--keylength $keylength} --debug 2
+              fi
+              if [ $? -ne 0 ]; then
+                echo "[-] Failed to issue $cert_type certificate for $domains using $ca_type CA, skipping..."
+                create_github_issue "Certificate Issue Failed" "Failed to issue $cert_type certificate for $domains using $ca_type CA."
+                return 1
+              fi
+        
+              echo "[+] Install $cert_type certificate for $domains using $ca_type CA"
+              $ACME --installcert -d "$primary_domain" --key-file "$key_file" --fullchain-file "$cert_file"
+              if [ $? -ne 0 ]; then
+                echo "[-] Failed to install $cert_type certificate for $domains using $ca_type CA, skipping..."
+                create_github_issue "Certificate Installation Failed" "Failed to install $cert_type certificate for $domains using $ca_type CA."
+                return 1
+              fi
+        
+              git add "$cert_path"
+              git commit -m "Update $cert_type certificate for $domains using $ca_type CA at $(date)"
+            }
+        
+            mkdir -p ./ssl
+            
+            # 在此添加dnsapi
+            declare -A dns_plugins=(
+              ["dnspod"]="dns_dp" 
+              ["aliyun"]="dns_ali" 
+              ["tencent"]="dns_tencent" 
+              ["cloudflare"]="dns_cf" 
+              ["aws"]="dns_aws" 
+              ["gadaddy"]="dns_gd"
+            )
+        
+            process_domain_group() {
+              provider=$1
+              domain_group=$2
+              primary_domain=$(echo "$domain_group" | awk '{print $1}')
+              mkdir -p "./ssl/$primary_domain/ECC" "./ssl/$primary_domain/RSA"
+              if [ -n "${{ vars.BACKUP_CA }}" ]; then
+                mkdir -p "./backup_ssl/$primary_domain/ECC" "./backup_ssl/$primary_domain/RSA"
+              fi
+              echo "[+] DNS provider: $provider, Domains: $domain_group"
+        
+              missing_domains_ecc=$(verify_certificate_domains "./ssl/$primary_domain/ECC/$primary_domain.cer" "$domain_group")
+              if [ -n "$missing_domains_ecc" ]; then
+                echo "[+] Missing domains in PRIMARY ECC certificate: $missing_domains_ecc"
+                issue_and_install_certificate "$missing_domains_ecc" "ECC" "${{ vars.CA }}" "${{ vars.ECC_KEYLENGTH }}" "$provider" "PRIMARY"
+                if [ -n "${{ vars.BACKUP_CA }}" ]; then
+                  echo "[+] Applying for BACKUP ECC certificate"
+                  issue_and_install_certificate "$missing_domains_ecc" "ECC" "${{ vars.BACKUP_CA }}" "${{ vars.ECC_KEYLENGTH }}" "$provider" "BACKUP"
+                fi
+              else
+                echo "[-] PRIMARY ECC certificate for $primary_domain is up-to-date and valid."
+              fi
+        
+              missing_domains_rsa=$(verify_certificate_domains "./ssl/$primary_domain/RSA/$primary_domain.cer" "$domain_group")
+              if [ -n "$missing_domains_rsa" ]; then
+                echo "[+] Missing domains in PRIMARY RSA certificate: $missing_domains_rsa"
+                issue_and_install_certificate "$missing_domains_rsa" "RSA" "${{ vars.CA }}" "${{ vars.RSA_KEYLENGTH }}" "$provider" "PRIMARY"
+                if [ -n "${{ vars.BACKUP_CA }}" ]; then
+                  echo "[+] Applying for BACKUP RSA certificate"
+                  issue_and_install_certificate "$missing_domains_rsa" "RSA" "${{ vars.BACKUP_CA }}" "${{ vars.RSA_KEYLENGTH }}" "$provider" "BACKUP"
+                fi
+              else
+                echo "[-] PRIMARY RSA certificate for $primary_domain is up-to-date and valid."
+              fi
+            }
+        
+            while IFS= read -r provider; do
+              provider=${provider#- }
+              while IFS= read -r domain_group; do
+                domain_group=${domain_group#- }
+                domain_group=$(echo "$domain_group" | sed 's/ && / /g')
+                process_domain_group "$provider" "$domain_group" &
+              done < <(yq eval ".[\"$provider\"]" domains.yaml)
+              wait
+            done < <(yq eval 'keys' domains.yaml)
+        # 颁发和部署证书，检查证书的有效性和域名匹配情况，并更新证书
+
+      - name: Update Certificate Status (After Issue & Deploy)
+        run: |
+          CURRENT_TIME=$(date +"%Y-%m-%d %H:%M:%S")
+          CERT_FILE="Certificate.md"
+          BACKUP_CERT_FILE="Backup_Certificate.md"
+  
+          echo "## Certificate Status (Updated at $CURRENT_TIME)" > $CERT_FILE
+          echo "| Domain Group | Primary Domain | Expiry Date (ECC) | Issuer O (ECC) | Issuer CN (ECC) | Expiry Date (RSA) | Issuer O (RSA) | Issuer CN (RSA) |" >> $CERT_FILE
+          echo "|--------------|----------------|------------------|---------------|----------------|-------------------|----------------|-----------------|" >> $CERT_FILE
+  
+          echo "## Backup Certificate Status (Updated at $CURRENT_TIME)" > $BACKUP_CERT_FILE
+          echo "| Domain Group | Primary Domain | Expiry Date (ECC) | Issuer O (ECC) | Issuer CN (ECC) | Expiry Date (RSA) | Issuer O (RSA) | Issuer CN (RSA) |" >> $BACKUP_CERT_FILE
+          echo "|--------------|----------------|------------------|---------------|----------------|-------------------|----------------|-----------------|" >> $BACKUP_CERT_FILE
+  
+          while IFS= read -r provider; do
+            provider=${provider#- }
+            while IFS= read -r domain_group; do
+              domain_group=${domain_group#- }
+              domain_group=$(echo "$domain_group" | sed 's/ && / /g')
+              primary_domain=$(echo "$domain_group" | awk '{print $1}')
+  
+              expiry_date_ecc="N/A"
+              issuer_o_ecc="N/A"
+              issuer_cn_ecc="N/A"
+              expiry_date_rsa="N/A"
+              issuer_o_rsa="N/A"
+              issuer_cn_rsa="N/A"
+  
+              backup_expiry_date_ecc="N/A"
+              backup_issuer_o_ecc="N/A"
+              backup_issuer_cn_ecc="N/A"
+              backup_expiry_date_rsa="N/A"
+              backup_issuer_o_rsa="N/A"
+              backup_issuer_cn_rsa="N/A"
+  
+              if [ -f "./ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
+                expiry_date_ecc=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer")
+                issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              if [ -f "./ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
+                expiry_date_rsa=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer")
+                issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              if [ -f "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
+                backup_expiry_date_ecc=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer")
+                backup_issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                backup_issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              if [ -f "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
+                backup_expiry_date_rsa=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer")
+                backup_issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
+                backup_issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+              fi
+  
+              echo "| $domain_group | $primary_domain | $expiry_date_ecc | $issuer_o_ecc | $issuer_cn_ecc | $expiry_date_rsa | $issuer_o_rsa | $issuer_cn_rsa |" >> $CERT_FILE
+              echo "| $domain_group | $primary_domain | $backup_expiry_date_ecc | $backup_issuer_o_ecc | $backup_issuer_cn_ecc | $backup_expiry_date_rsa | $backup_issuer_o_rsa | $backup_issuer_cn_rsa |" >> $BACKUP_CERT_FILE
+            done < <(yq eval ".[\"$provider\"]" domains.yaml)
+          done < <(yq eval 'keys' domains.yaml)
+  
+          git add $CERT_FILE $BACKUP_CERT_FILE
+          git commit -m "Update Certificate.md and Backup_Certificate.md with certificate expiry dates and execution time at $CURRENT_TIME"  
+        # 更新证书状态文件，记录证书的过期时间和颁发者信息
+
+      - name: Output Directory Structures
+        run: |
+          tree -r
+          if [ -d "ssl" ]; then
+            echo "SSL Directory Structure:"
+            tree -a ssl || echo "Failed to list SSL directory."
+          else
+            echo "SSL directory does not exist."
+          fi
+
+          if [ -d "backup_ssl" ]; then
+            echo "Backup SSL Directory Structure:"
+            tree -a backup_ssl || echo "Failed to list backup SSL directory."
+          else
+            echo "Backup SSL directory does not exist."
+          fi
+        # 输出 SSL 和 backup_ssl 目录的结构
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+        # 推送更改到代码库
