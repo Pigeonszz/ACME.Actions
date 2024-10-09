@@ -52,77 +52,44 @@ jobs:
           cat "$ZEROSSL_CONF_PATH"
         # 安装并配置 acme.sh，设置 ZeroSSL 的 EAB 密钥
 
-      - name: Update Certificate Status
+      - name: Check and Generate Random Numbers and Create Directories
         run: |
-          CURRENT_TIME=$(date +"%Y-%m-%d %H:%M:%S")
-          CERT_FILE="Certificate.md"
-          BACKUP_CERT_FILE="Backup_Certificate.md"
-  
-          echo "## Certificate Status (Updated at $CURRENT_TIME)" > $CERT_FILE
-          echo "| Domain Group | Primary Domain | Expiry Date (ECC) | Issuer O (ECC) | Issuer CN (ECC) | Expiry Date (RSA) | Issuer O (RSA) | Issuer CN (RSA) |" >> $CERT_FILE
-          echo "|--------------|----------------|------------------|---------------|----------------|-------------------|----------------|-----------------|" >> $CERT_FILE
-  
-          echo "## Backup Certificate Status (Updated at $CURRENT_TIME)" > $BACKUP_CERT_FILE
-          echo "| Domain Group | Primary Domain | Expiry Date (ECC) | Issuer O (ECC) | Issuer CN (ECC) | Expiry Date (RSA) | Issuer O (RSA) | Issuer CN (RSA) |" >> $BACKUP_CERT_FILE
-          echo "|--------------|----------------|------------------|---------------|----------------|-------------------|----------------|-----------------|" >> $BACKUP_CERT_FILE
-  
+          generate_random_number() {
+            openssl rand -hex 16
+          }
+
           while IFS= read -r provider; do
             provider=${provider#- }
             while IFS= read -r domain_group; do
               domain_group=${domain_group#- }
               domain_group=$(echo "$domain_group" | sed 's/ && / /g')
               primary_domain=$(echo "$domain_group" | awk '{print $1}')
-  
-              expiry_date_ecc="N/A"
-              issuer_o_ecc="N/A"
-              issuer_cn_ecc="N/A"
-              expiry_date_rsa="N/A"
-              issuer_o_rsa="N/A"
-              issuer_cn_rsa="N/A"
-  
-              backup_expiry_date_ecc="N/A"
-              backup_issuer_o_ecc="N/A"
-              backup_issuer_cn_ecc="N/A"
-              backup_expiry_date_rsa="N/A"
-              backup_issuer_o_rsa="N/A"
-              backup_issuer_cn_rsa="N/A"
-  
-              if [ -f "./ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
-                expiry_date_ecc=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer")
-                issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
-                issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+
+              # 检查并生成随机数目录
+              if [ -d "./ssl/$primary_domain" ]; then
+                random_number_ecc=$(ls "./ssl/$primary_domain" | grep -E '^[0-9a-f]{32}$' | head -n 1)
+                random_number_rsa=$(ls "./ssl/$primary_domain" | grep -E '^[0-9a-f]{32}$' | head -n 1)
+              else
+                random_number_ecc=$(generate_random_number)
+                random_number_rsa=$(generate_random_number)
               fi
-  
-              if [ -f "./ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
-                expiry_date_rsa=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer")
-                issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
-                issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
+
+              if [ -d "./backup_ssl/$primary_domain" ]; then
+                random_number_backup_ecc=$(ls "./backup_ssl/$primary_domain" | grep -E '^[0-9a-f]{32}$' | head -n 1)
+                random_number_backup_rsa=$(ls "./backup_ssl/$primary_domain" | grep -E '^[0-9a-f]{32}$' | head -n 1)
+              else
+                random_number_backup_ecc=$(generate_random_number)
+                random_number_backup_rsa=$(generate_random_number)
               fi
-  
-              if [ -f "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
-                backup_expiry_date_ecc=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer")
-                backup_issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
-                backup_issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
-              fi
-  
-              if [ -f "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
-                backup_expiry_date_rsa=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer")
-                backup_issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
-                backup_issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
-              fi
-  
-              echo "| $domain_group | $primary_domain | $expiry_date_ecc | $issuer_o_ecc | $issuer_cn_ecc | $expiry_date_rsa | $issuer_o_rsa | $issuer_cn_rsa |" >> $CERT_FILE
-              echo "| $domain_group | $primary_domain | $backup_expiry_date_ecc | $backup_issuer_o_ecc | $backup_issuer_cn_ecc | $backup_expiry_date_rsa | $backup_issuer_o_rsa | $backup_issuer_cn_rsa |" >> $BACKUP_CERT_FILE
+
+              mkdir -p "./ssl/$primary_domain/$random_number_ecc/ECC"
+              mkdir -p "./ssl/$primary_domain/$random_number_rsa/RSA"
+              mkdir -p "./backup_ssl/$primary_domain/$random_number_backup_ecc/ECC"
+              mkdir -p "./backup_ssl/$primary_domain/$random_number_backup_rsa/RSA"
+
             done < <(yq eval ".[\"$provider\"]" domains.yaml)
           done < <(yq eval 'keys' domains.yaml)
-  
-          git add $CERT_FILE $BACKUP_CERT_FILE
-          git commit -m "Update Certificate.md and Backup_Certificate.md with certificate expiry dates and execution time at $CURRENT_TIME"  
-        # 更新证书状态文件，记录证书的过期时间和颁发者信息
+        # 检查并生成随机数目录
 
       - name: Issue & Deploy Certificates
         run: |
@@ -171,9 +138,9 @@ jobs:
               keylength=$4
               dns_plugin=${dns_plugins[$5]}
               ca_type=$6
-              cert_path="./ssl/$primary_domain/$cert_type"
+              cert_path="./ssl/$primary_domain/$random_number_${cert_type,,}/$cert_type"
               if [ "$ca_type" = "BACKUP" ]; then
-                cert_path="./backup_ssl/$primary_domain/$cert_type"
+                cert_path="./backup_ssl/$primary_domain/$random_number_backup_${cert_type,,}/$cert_type"
               fi
               cert_file="$cert_path/$primary_domain.cer"
               key_file="$cert_path/$primary_domain.key"
@@ -207,8 +174,8 @@ jobs:
             }
         
             mkdir -p ./ssl
-            
-            # 在此添加dnsapi
+        
+            #在这里添加dnsapi
             declare -A dns_plugins=(
               ["dnspod"]="dns_dp" 
               ["aliyun"]="dns_ali" 
@@ -222,13 +189,9 @@ jobs:
               provider=$1
               domain_group=$2
               primary_domain=$(echo "$domain_group" | awk '{print $1}')
-              mkdir -p "./ssl/$primary_domain/ECC" "./ssl/$primary_domain/RSA"
-              if [ -n "${{ vars.BACKUP_CA }}" ]; then
-                mkdir -p "./backup_ssl/$primary_domain/ECC" "./backup_ssl/$primary_domain/RSA"
-              fi
               echo "[+] DNS provider: $provider, Domains: $domain_group"
         
-              missing_domains_ecc=$(verify_certificate_domains "./ssl/$primary_domain/ECC/$primary_domain.cer" "$domain_group")
+              missing_domains_ecc=$(verify_certificate_domains "./ssl/$primary_domain/$random_number_ecc/ECC/$primary_domain.cer" "$domain_group")
               if [ -n "$missing_domains_ecc" ]; then
                 echo "[+] Missing domains in PRIMARY ECC certificate: $missing_domains_ecc"
                 issue_and_install_certificate "$missing_domains_ecc" "ECC" "${{ vars.CA }}" "${{ vars.ECC_KEYLENGTH }}" "$provider" "PRIMARY"
@@ -240,7 +203,7 @@ jobs:
                 echo "[-] PRIMARY ECC certificate for $primary_domain is up-to-date and valid."
               fi
         
-              missing_domains_rsa=$(verify_certificate_domains "./ssl/$primary_domain/RSA/$primary_domain.cer" "$domain_group")
+              missing_domains_rsa=$(verify_certificate_domains "./ssl/$primary_domain/$random_number_rsa/RSA/$primary_domain.cer" "$domain_group")
               if [ -n "$missing_domains_rsa" ]; then
                 echo "[+] Missing domains in PRIMARY RSA certificate: $missing_domains_rsa"
                 issue_and_install_certificate "$missing_domains_rsa" "RSA" "${{ vars.CA }}" "${{ vars.RSA_KEYLENGTH }}" "$provider" "PRIMARY"
@@ -299,30 +262,30 @@ jobs:
               backup_issuer_o_rsa="N/A"
               backup_issuer_cn_rsa="N/A"
   
-              if [ -f "./ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
-                expiry_date_ecc=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/ECC/$primary_domain.cer")
+              if [ -f "./ssl/$primary_domain/$random_number_ecc/ECC/$primary_domain.cer" ]; then
+                expiry_date_ecc=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/$random_number_ecc/ECC/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/$random_number_ecc/ECC/$primary_domain.cer")
                 issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
                 issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
               fi
   
-              if [ -f "./ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
-                expiry_date_rsa=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/RSA/$primary_domain.cer")
+              if [ -f "./ssl/$primary_domain/$random_number_rsa/RSA/$primary_domain.cer" ]; then
+                expiry_date_rsa=$(openssl x509 -enddate -noout -in "./ssl/$primary_domain/$random_number_rsa/RSA/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./ssl/$primary_domain/$random_number_rsa/RSA/$primary_domain.cer")
                 issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
                 issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
               fi
   
-              if [ -f "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" ]; then
-                backup_expiry_date_ecc=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/ECC/$primary_domain.cer")
+              if [ -f "./backup_ssl/$primary_domain/$random_number_backup_ecc/ECC/$primary_domain.cer" ]; then
+                backup_expiry_date_ecc=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/$random_number_backup_ecc/ECC/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/$random_number_backup_ecc/ECC/$primary_domain.cer")
                 backup_issuer_o_ecc=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
                 backup_issuer_cn_ecc=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
               fi
   
-              if [ -f "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" ]; then
-                backup_expiry_date_rsa=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer" | cut -d= -f2)
-                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/RSA/$primary_domain.cer")
+              if [ -f "./backup_ssl/$primary_domain/$random_number_backup_rsa/RSA/$primary_domain.cer" ]; then
+                backup_expiry_date_rsa=$(openssl x509 -enddate -noout -in "./backup_ssl/$primary_domain/$random_number_backup_rsa/RSA/$primary_domain.cer" | cut -d= -f2)
+                issuer_info=$(openssl x509 -issuer -noout -in "./backup_ssl/$primary_domain/$random_number_backup_rsa/RSA/$primary_domain.cer")
                 backup_issuer_o_rsa=$(echo "$issuer_info" | grep -oP 'O = \K[^,]*')
                 backup_issuer_cn_rsa=$(echo "$issuer_info" | grep -oP 'CN = \K.*')
               fi
